@@ -14,8 +14,8 @@ jobs:
         # Самая старая поддерживаемая версия и та, что в Docker-образе.
         python-version: ["3.9", "3.12"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -25,7 +25,7 @@ jobs:
   docker:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: docker compose build
       # Раннер GitHub работает под uid 1001, а контейнер под 1000: без этого
       # контейнер не сможет создать базу в смонтированной папке data/.
@@ -34,13 +34,34 @@ jobs:
         run: |
           docker compose run --rm cli generate --days 3
           docker compose run --rm cli import /app/data/generated/auth.log --tz Europe/Moscow
-      # --wait ждёт, пока healthcheck API станет зелёным и дашборд запустится.
-      - run: docker compose up -d --wait
-      - name: API и дашборд отвечают
+      # Ждём сами, а не через `up --wait`: при ошибке этот же шаг печатает
+      # состояние контейнера, историю healthcheck и его лог.
+      - name: Запустить API и дождаться ответа
         run: |
-          curl --fail --silent http://127.0.0.1:8000/health
-          curl --fail --silent --output /dev/null http://127.0.0.1:8001
-      - if: failure()
-        run: docker compose logs
+          docker compose up -d api
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8000/health; then exit 0; fi
+            sleep 2
+          done
+          echo "::group::Состояние контейнеров"
+          docker compose ps --all
+          echo "::endgroup::"
+          echo "::group::Проверки здоровья API"
+          docker inspect --format '{{json .State.Health}}' "$(docker compose ps --all --quiet api)"
+          echo "::endgroup::"
+          echo "Лог API:"
+          docker compose logs api
+          exit 1
+      - name: Запустить дашборд и дождаться ответа
+        run: |
+          docker compose up -d dashboard
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --output /dev/null http://127.0.0.1:8001; then exit 0; fi
+            sleep 2
+          done
+          docker compose ps --all
+          echo "Лог дашборда:"
+          docker compose logs dashboard
+          exit 1
       - if: always()
         run: docker compose down
