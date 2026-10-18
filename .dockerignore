@@ -1,0 +1,13 @@
+# В образ попадает только то, что нужно для запуска.
+.git
+.venv
+venv
+data
+docs
+tests
+**/__pycache__
+**/*.egg-info
+.pytest_cache
+*.log
+*.gz
+*.db

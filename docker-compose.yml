@@ -1,0 +1,51 @@
+# Запуск: docker compose up --build
+# API:     http://127.0.0.1:8000/docs
+# Дашборд: http://127.0.0.1:8001
+#
+# Импорт лога (файл положить в ./data/raw/):
+#   docker compose run --rm cli import /app/data/raw/auth.log --tz Europe/Moscow
+
+x-app: &app
+  build: .
+  image: attack-analyzer:latest
+  volumes:
+    - ./data:/app/data
+    - ./config.toml:/app/config.toml:ro
+  restart: unless-stopped
+
+services:
+  api:
+    <<: *app
+    command: ["serve", "--host", "0.0.0.0", "--port", "8000"]
+    # 127.0.0.1 слева: порт доступен только с этой машины. В API IP-адреса
+    # и логины, наружу его открывать незачем (на VPS — смотреть через SSH-туннель).
+    ports:
+      - "127.0.0.1:8000:8000"
+    healthcheck:
+      # В slim-образе нет curl, поэтому проверяем стандартным urllib.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  dashboard:
+    <<: *app
+    command: ["dashboard", "--host", "0.0.0.0", "--port", "8001", "--tz", "${DASHBOARD_TZ:-Europe/Moscow}"]
+    environment:
+      # Внутри сети compose сервис доступен по имени: api, а не 127.0.0.1.
+      ATTACK_ANALYZER_API: http://api:8000
+    ports:
+      - "127.0.0.1:8001:8001"
+    depends_on:
+      api:
+        # Ждём не просто запуска контейнера, а ответа /health.
+        condition: service_healthy
+
+  cli:
+    <<: *app
+    # Разовые команды (import, detect, attackers, charts). Профиль tools не даёт
+    # сервису стартовать при обычном `docker compose up`.
+    profiles: ["tools"]
+    restart: "no"
+    command: ["--help"]

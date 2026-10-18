@@ -3,7 +3,7 @@
 Разбор логов SSH с Debian-сервера, поиск брутфорса, перебора логинов
 и сканеров, аналитика и дашборд.
 
-Статус: **этап 6** — генератор тестового `auth.log`, парсер, хранение в SQLite, детектор атак, HTTP API, графики, дашборд.
+Генератор тестового `auth.log`, парсер, хранение в SQLite, детектор атак, HTTP API, графики, дашборд, Docker.
 
 ## Установка
 
@@ -180,6 +180,49 @@ python -m attack_analyzer dashboard --tz Europe/Moscow
 - таблица атакующих IP: при выборе строки ниже показываются события этого IP;
 - инциденты (вход после атаки выделен цветом) и последние события.
 
+## Docker
+
+Проект запускается и без Docker (всё выше); Docker нужен, чтобы поднять
+API и дашборд одной командой, например на сервере.
+
+```bash
+docker compose up --build -d
+```
+
+- API: http://127.0.0.1:8000/docs
+- дашборд: http://127.0.0.1:8001 (часовой пояс: переменная `DASHBOARD_TZ`,
+  по умолчанию `Europe/Moscow`)
+
+База лежит в `./data/attacks.db` на хосте (папка монтируется в контейнеры),
+пороги детектора берутся из `./config.toml`.
+
+Разовые команды выполняет сервис `cli`:
+
+```bash
+# положить лог в ./data/raw/auth.log и импортировать
+docker compose run --rm cli import /app/data/raw/auth.log --tz Europe/Moscow
+docker compose run --rm cli detect
+docker compose run --rm cli charts --tz Europe/Moscow --out /app/data/charts
+```
+
+На самом VPS лог можно читать прямо из `/var/log`, смонтировав его только для чтения.
+`auth.log` в Debian читают только root и группа `adm` (gid 4), поэтому
+команда запускается с этой группой:
+
+```bash
+docker compose run --rm --user 1000:4 -v /var/log:/host-log:ro cli import /host-log/auth.log --tz Europe/Moscow
+```
+
+Порты открыты только на `127.0.0.1`. Чтобы посмотреть дашборд с сервера
+на своём компьютере, используйте SSH-туннель:
+
+```bash
+ssh -L 8001:127.0.0.1:8001 -L 8000:127.0.0.1:8000 user@your-vps
+```
+
+Контейнеры работают от пользователя с uid 1000. Если на Linux-хосте папка
+`data/` принадлежит другому пользователю, выдайте права: `sudo chown -R 1000:1000 data`.
+
 ## Тесты
 
 ```bash
@@ -204,5 +247,6 @@ src/attack_analyzer/
 tests/                  pytest
 config.toml             пороги детектора и адрес базы
 docs/images/            графики для README
+Dockerfile, docker-compose.yml
 data/                   логи и база (в .gitignore)
 ```
