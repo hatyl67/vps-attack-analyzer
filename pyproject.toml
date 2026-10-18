@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "attack-analyzer"
+version = "0.1.0"
+description = "Анализатор атак на VPS по логам SSH (auth.log / journalctl)"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "pandas>=2.0",
+    # База часовых поясов для zoneinfo: на Windows и в slim-образах её нет.
+    "tzdata",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+attack-analyzer = "attack_analyzer.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Тесты видят пакет из src/ даже без `pip install -e .`
+pythonpath = ["src"]
