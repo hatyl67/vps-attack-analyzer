@@ -7,6 +7,7 @@
     attackers  показать топ атакующих IP из базы
     charts     нарисовать графики атак в PNG
     serve      запустить HTTP API
+    dashboard  запустить дашборд (нужен работающий API)
 """
 
 from __future__ import annotations
@@ -195,6 +196,15 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_dashboard(args: argparse.Namespace) -> int:
+    from shiny import run_app
+
+    from attack_analyzer.dashboard.app import create_dashboard
+
+    run_app(create_dashboard(args.api, args.tz), host=args.host, port=args.port, launch_browser=False)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Возвращает argparse-парсер со всеми подкомандами."""
     parser = argparse.ArgumentParser(
@@ -265,6 +275,13 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8000)
     serve.set_defaults(handler=_cmd_serve)
+
+    board = commands.add_parser("dashboard", help="запустить дашборд Shiny")
+    board.add_argument("--api", help="адрес API (по умолчанию ATTACK_ANALYZER_API или http://127.0.0.1:8000)")
+    board.add_argument("--tz", default="UTC", help="часовой пояс, выбранный при открытии")
+    board.add_argument("--host", default="127.0.0.1")
+    board.add_argument("--port", type=int, default=8001)
+    board.set_defaults(handler=_cmd_dashboard)
     return parser
 
 

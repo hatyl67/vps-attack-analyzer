@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+from io import BytesIO
 from pathlib import Path
 from typing import Union
 from zoneinfo import ZoneInfo
@@ -74,17 +75,15 @@ def _no_data(axes: Axes) -> None:
     axes.set_yticks([])
 
 
-def plot_timeline(events: pd.DataFrame, bucket: str = "day", tz: TimezoneName = "UTC") -> Figure:
-    """Принимает события, корзину ("hour"/"day") и пояс; возвращает столбчатый график атак по типам."""
+def draw_timeline(table: pd.DataFrame, bucket: str = "day", tz: TimezoneName = "UTC") -> Figure:
+    """Принимает таблицу analytics.timeline (или такую же из API), возвращает столбчатый график атак по типам."""
     figure, axes = _new_axes(9, 3.6)
     unit = "дням" if bucket == "day" else "часам"
     _title(axes, f"Атаки по {unit}", f"Враждебные события по типам, время {tz}")
-    hostile = events[events["event_type"].isin(HOSTILE_TYPES)]
-    if hostile.empty:
+    if table.empty or table[HOSTILE_TYPES].to_numpy().sum() == 0:
         _no_data(axes)
         return figure
 
-    table = analytics.timeline(hostile, bucket, tz)
     # Столбцы ставим по порядковым номерам, а не по датам: так подпись дня
     # стоит точно под своим столбцом, а не на границе суток.
     positions = list(range(len(table)))
@@ -124,16 +123,20 @@ def plot_timeline(events: pd.DataFrame, bucket: str = "day", tz: TimezoneName = 
     return figure
 
 
-def plot_heatmap(events: pd.DataFrame, tz: TimezoneName = "UTC") -> Figure:
-    """Принимает события и пояс, возвращает тепловую карту «день недели x час» по враждебным событиям."""
+def plot_timeline(events: pd.DataFrame, bucket: str = "day", tz: TimezoneName = "UTC") -> Figure:
+    """Принимает события, корзину ("hour"/"day") и пояс; возвращает столбчатый график атак по типам."""
+    hostile = events[events["event_type"].isin(HOSTILE_TYPES)]
+    return draw_timeline(analytics.timeline(hostile, bucket, tz), bucket, tz)
+
+
+def draw_heatmap(table: pd.DataFrame, tz: TimezoneName = "UTC") -> Figure:
+    """Принимает таблицу 7x24 из analytics.weekday_hour_heatmap (или API), возвращает тепловую карту."""
     figure, axes = _new_axes(9, 3.4)
     _title(axes, "Когда атакуют", f"Враждебные события по дням недели и часам, время {tz}")
-    hostile = events[events["event_type"].isin(HOSTILE_TYPES)]
-    if hostile.empty:
+    if table.to_numpy().sum() == 0:
         _no_data(axes)
         return figure
 
-    table = analytics.weekday_hour_heatmap(hostile, tz)
     mesh = axes.pcolormesh(table.values, cmap=HEATMAP_CMAP, edgecolors=SURFACE, linewidth=1.5)
     axes.invert_yaxis()
     axes.set_yticks([row + 0.5 for row in range(7)], list(table.index))
@@ -146,8 +149,15 @@ def plot_heatmap(events: pd.DataFrame, tz: TimezoneName = "UTC") -> Figure:
     return figure
 
 
-def _plot_ranking(series: pd.Series, title: str, subtitle: str, value_label: str) -> Figure:
-    figure, axes = _new_axes(7, 0.35 * max(len(series), 3) + 1.2)
+def plot_heatmap(events: pd.DataFrame, tz: TimezoneName = "UTC") -> Figure:
+    """Принимает события и пояс, возвращает тепловую карту «день недели x час» по враждебным событиям."""
+    hostile = events[events["event_type"].isin(HOSTILE_TYPES)]
+    return draw_heatmap(analytics.weekday_hour_heatmap(hostile, tz), tz)
+
+
+def draw_ranking(series: pd.Series, title: str, subtitle: str, value_label: str, width: float = 7) -> Figure:
+    """Принимает Series «значение -> число» по убыванию, возвращает горизонтальный рейтинг."""
+    figure, axes = _new_axes(width, 0.35 * max(len(series), 3) + 1.2)
     _title(axes, title, subtitle)
     if series.empty:
         _no_data(axes)
@@ -170,14 +180,21 @@ def plot_top_ips(events: pd.DataFrame, limit: int = 10) -> Figure:
     """Принимает события, возвращает горизонтальный рейтинг IP по числу враждебных событий."""
     hostile = events[events["event_type"].isin(HOSTILE_TYPES)]
     counts = analytics.top_values(hostile, "ip", limit)
-    return _plot_ranking(counts, f"Топ-{limit} атакующих IP", "Неудачные входы, неверные логины и сканирование", "событий")
+    return draw_ranking(counts, f"Топ-{limit} атакующих IP", "Неудачные входы, неверные логины и сканирование", "событий")
 
 
 def plot_top_usernames(events: pd.DataFrame, limit: int = 10) -> Figure:
     """Принимает события, возвращает рейтинг логинов в неудачных попытках входа."""
     failed = events[events["event_type"] == EventType.FAILED_LOGIN.value]
     counts = analytics.top_values(failed, "username", limit)
-    return _plot_ranking(counts, f"Топ-{limit} логинов", "Под какими логинами пытались войти", "неудачных попыток")
+    return draw_ranking(counts, f"Топ-{limit} логинов", "Под какими логинами пытались войти", "неудачных попыток")
+
+
+def figure_to_png(figure: Figure) -> bytes:
+    """Возвращает картинку графика в формате PNG."""
+    buffer = BytesIO()
+    figure.savefig(buffer, format="png", facecolor=SURFACE)
+    return buffer.getvalue()
 
 
 def save_charts(
@@ -200,6 +217,6 @@ def save_charts(
     paths = []
     for name, figure in figures.items():
         path = out_dir / name
-        figure.savefig(path, facecolor=SURFACE)
+        path.write_bytes(figure_to_png(figure))
         paths.append(path)
     return paths

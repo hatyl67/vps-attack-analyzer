@@ -3,7 +3,7 @@
 Разбор логов SSH с Debian-сервера, поиск брутфорса, перебора логинов
 и сканеров, аналитика и дашборд.
 
-Статус: **этап 5** — генератор тестового `auth.log`, парсер, хранение в SQLite, детектор атак, HTTP API, графики.
+Статус: **этап 6** — генератор тестового `auth.log`, парсер, хранение в SQLite, детектор атак, HTTP API, графики, дашборд.
 
 ## Установка
 
@@ -157,6 +157,29 @@ python -m attack_analyzer serve
 API только читает данные; события попадают в базу командой `import`.
 По умолчанию сервер слушает 127.0.0.1.
 
+## Дашборд
+
+Дашборд берёт данные из HTTP API, поэтому API должен быть запущен.
+В двух терминалах:
+
+```bash
+python -m attack_analyzer serve
+python -m attack_analyzer dashboard --tz Europe/Moscow
+```
+
+Откройте http://127.0.0.1:8001. Адрес API задаётся опцией `--api` или
+переменной `ATTACK_ANALYZER_API` (по умолчанию http://127.0.0.1:8000).
+
+Что есть на странице:
+
+![Дашборд](docs/images/dashboard.png)
+
+- период, часовой пояс, типы событий, группировка по дням или часам;
+- цифры за период: события, уникальные IP, атакующие IP, входы после атаки;
+- графики: атаки по времени, тепловая карта «день недели x час», топ логинов;
+- таблица атакующих IP: при выборе строки ниже показываются события этого IP;
+- инциденты (вход после атаки выделен цветом) и последние события.
+
 ## Тесты
 
 ```bash
@@ -173,10 +196,11 @@ src/attack_analyzer/
     analytics.py        агрегации: ряды по времени, тепловая карта, топы
     charts.py           графики matplotlib
     api/                FastAPI: схемы Pydantic, зависимости, эндпоинты
+    dashboard/          Shiny: клиент API и страница дашборда
     parsers/auth_log.py парсер auth.log / journalctl
     storage/            SQLAlchemy: таблицы, подключение, запись и чтение
     generator.py        генератор тестового лога
-    cli.py              команды generate, parse, import, detect, attackers, charts, serve
+    cli.py              команды generate, parse, import, detect, attackers, charts, serve, dashboard
 tests/                  pytest
 config.toml             пороги детектора и адрес базы
 docs/images/            графики для README
