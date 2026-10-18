@@ -12,6 +12,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from attack_analyzer.detector import detect
 from attack_analyzer.generator import ALICE_IPS, CI_IP, GeneratedLog, generate
 from attack_analyzer.models import EventType
 from attack_analyzer.parsers import events_to_dataframe, parse_lines
@@ -21,7 +22,9 @@ from attack_analyzer.storage import (
     make_engine,
     make_session_factory,
     read_events,
+    read_incidents,
     refresh_attackers,
+    replace_incidents,
     save_events,
     top_attackers,
 )
@@ -126,3 +129,15 @@ def test_top_attackers_sorted(session: Session, generated_df: pd.DataFrame) -> N
     assert len(top) == 5
     failed = [attacker.failed_logins for attacker in top]
     assert failed == sorted(failed, reverse=True)
+
+
+def test_replace_incidents_roundtrip(session: Session, generated_df: pd.DataFrame) -> None:
+    incidents = detect(generated_df)
+    assert replace_incidents(session, incidents) == len(incidents)
+    assert read_incidents(session) == incidents
+
+    replace_incidents(session, incidents[:1])
+    assert read_incidents(session) == incidents[:1]
+
+    kind = incidents[0].kind
+    assert all(incident.kind is kind for incident in read_incidents(session, kind=kind))

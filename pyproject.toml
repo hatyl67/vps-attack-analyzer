@@ -11,6 +11,8 @@ requires-python = ">=3.9"
 dependencies = [
     "pandas>=2.0",
     "SQLAlchemy>=2.0",
+    # tomllib появился в стандартной библиотеке только в Python 3.11.
+    "tomli>=1.1; python_version < '3.11'",
     # База часовых поясов для zoneinfo: на Windows и в slim-образах её нет.
     "tzdata",
 ]

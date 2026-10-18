@@ -9,7 +9,7 @@ from sqlalchemy import DateTime, Enum, Index, String, TypeDecorator
 from sqlalchemy.engine import Dialect
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-from attack_analyzer.models import EventType
+from attack_analyzer.models import EventType, IncidentKind
 
 # Самая длинная текстовая запись IP: IPv6 с IPv4-хвостом, 45 символов.
 IP_LENGTH = 45
@@ -37,6 +37,17 @@ class UTCDateTime(TypeDecorator[datetime]):
         return value.replace(tzinfo=timezone.utc)
 
 
+def _string_enum(enum_class: type) -> Enum:
+    # native_enum=False: в SQLite нет типа ENUM, хранится обычная строка.
+    # values_callable: в базу пишется "failed_login", а не имя члена "FAILED_LOGIN".
+    return Enum(
+        enum_class,
+        native_enum=False,
+        length=30,
+        values_callable=lambda members: [member.value for member in members],
+    )
+
+
 class Base(DeclarativeBase):
     pass
 
@@ -52,17 +63,7 @@ class Event(Base):
     # Хэш содержимого события: по нему повторный импорт того же лога не создаёт дублей.
     event_key: Mapped[str] = mapped_column(String(40), unique=True)
     timestamp: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
-    event_type: Mapped[EventType] = mapped_column(
-        # native_enum=False: в SQLite нет типа ENUM, хранится обычная строка.
-        # values_callable: в базу пишется "failed_login", а не имя члена "FAILED_LOGIN".
-        Enum(
-            EventType,
-            native_enum=False,
-            length=20,
-            values_callable=lambda members: [member.value for member in members],
-        ),
-        index=True,
-    )
+    event_type: Mapped[EventType] = mapped_column(_string_enum(EventType), index=True)
     ip: Mapped[str] = mapped_column(String(IP_LENGTH))
     username: Mapped[Optional[str]] = mapped_column(String(255))
     port: Mapped[Optional[int]]
@@ -86,3 +87,18 @@ class Attacker(Base):
     scanner_hits: Mapped[int]
     successful_logins: Mapped[int]
     distinct_usernames: Mapped[int]
+
+
+class IncidentRecord(Base):
+    """Атака, найденная детектором (строка таблицы incidents)."""
+
+    __tablename__ = "incidents"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    kind: Mapped[IncidentKind] = mapped_column(_string_enum(IncidentKind), index=True)
+    ip: Mapped[str] = mapped_column(String(IP_LENGTH), index=True)
+    start: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
+    end: Mapped[datetime] = mapped_column(UTCDateTime)
+    event_count: Mapped[int]
+    distinct_usernames: Mapped[int]
+    details: Mapped[str] = mapped_column(String(255))

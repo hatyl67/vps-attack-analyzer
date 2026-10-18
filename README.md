@@ -3,7 +3,7 @@
 Разбор логов SSH с Debian-сервера, поиск брутфорса, перебора логинов
 и сканеров, аналитика и дашборд.
 
-Статус: **этап 2** — генератор тестового `auth.log`, парсер, хранение в SQLite.
+Статус: **этап 3** — генератор тестового `auth.log`, парсер, хранение в SQLite, детектор атак.
 
 ## Установка
 
@@ -84,7 +84,30 @@ python -m attack_analyzer attackers --limit 10
 - `attackers` — сводка по каждому IP, от которого были неудачные входы,
   неверные логины или сканирование: первое и последнее появление, число
   неудачных входов, неверных логинов, сканирований, успешных входов и разных
-  логинов. Пересчитывается после каждого импорта.
+  логинов. Пересчитывается после каждого импорта;
+- `incidents` — атаки, найденные детектором.
+
+## Детектор атак
+
+`import` после сохранения событий сразу ищет атаки. Чтобы пересчитать их
+с другими порогами без повторного импорта:
+
+```bash
+python -m attack_analyzer detect
+```
+
+Пороги задаются в [`config.toml`](config.toml) (другой файл: `--config` или
+переменная `ATTACK_ANALYZER_CONFIG`):
+
+| Вид | Условие | Параметры |
+|---|---|---|
+| `bruteforce` | не меньше N неудачных входов с IP за окно T | `threshold`, `window_minutes` |
+| `enumeration` | не меньше K разных логинов с IP за окно T | `distinct_usernames`, `window_minutes` |
+| `repeated` | враждебные события с IP в D разных дней | `min_active_days` |
+| `success_after_attack` | успешный вход с IP после M неудачных за последние H часов | `min_failed_before`, `lookback_hours` |
+
+Адрес базы берётся по приоритету: `--db`, затем `ATTACK_ANALYZER_DB`,
+затем `[database] url` из `config.toml`.
 
 ## Тесты
 
@@ -96,11 +119,14 @@ pytest
 
 ```
 src/attack_analyzer/
-    models.py           EventType, AuthEvent
+    models.py           EventType, AuthEvent, IncidentKind, Incident
+    config.py           загрузка config.toml
+    detector.py         поиск атак по DataFrame событий
     parsers/auth_log.py парсер auth.log / journalctl
     storage/            SQLAlchemy: таблицы, подключение, запись и чтение
     generator.py        генератор тестового лога
-    cli.py              команды generate, parse, import, attackers
+    cli.py              команды generate, parse, import, detect, attackers
 tests/                  pytest
+config.toml             пороги детектора и адрес базы
 data/                   логи и база (в .gitignore)
 ```

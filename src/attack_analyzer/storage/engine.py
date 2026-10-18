@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Optional
 
@@ -13,12 +12,11 @@ from sqlalchemy.orm import Session, sessionmaker
 from attack_analyzer.storage.schema import Base
 
 DEFAULT_DATABASE_URL = "sqlite:///data/attacks.db"
-DATABASE_URL_ENV = "ATTACK_ANALYZER_DB"
 
 
 def database_url(url: Optional[str] = None) -> str:
-    """Возвращает адрес базы: аргумент, иначе переменная ATTACK_ANALYZER_DB, иначе data/attacks.db."""
-    return url or os.environ.get(DATABASE_URL_ENV, DEFAULT_DATABASE_URL)
+    """Возвращает переданный адрес базы или адрес по умолчанию (data/attacks.db)."""
+    return url or DEFAULT_DATABASE_URL
 
 
 def make_engine(url: Optional[str] = None) -> Engine:

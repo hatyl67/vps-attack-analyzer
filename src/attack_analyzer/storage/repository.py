@@ -1,4 +1,4 @@
-"""Запись событий в базу, пересчёт таблицы attackers и чтение."""
+"""Запись событий в базу, пересчёт таблиц attackers и incidents, чтение."""
 
 from __future__ import annotations
 
@@ -6,16 +6,16 @@ import hashlib
 import json
 from collections import Counter
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 import pandas as pd
 from sqlalchemy import Insert, case, delete, func, insert, select
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.orm import Session
 
-from attack_analyzer.models import AuthEvent, EventType
+from attack_analyzer.models import AuthEvent, EventType, Incident, IncidentKind
 from attack_analyzer.parsers import events_to_dataframe
-from attack_analyzer.storage.schema import Attacker, Event
+from attack_analyzer.storage.schema import Attacker, Event, IncidentRecord
 
 HOSTILE_EVENT_TYPES = (EventType.FAILED_LOGIN, EventType.INVALID_USER, EventType.SCANNER)
 
@@ -171,3 +171,50 @@ def top_attackers(session: Session, limit: int = 10) -> list[Attacker]:
         .limit(limit)
     )
     return list(session.scalars(query))
+
+
+def replace_incidents(session: Session, incidents: Sequence[Incident]) -> int:
+    """Заменяет содержимое таблицы incidents новыми инцидентами, возвращает их число."""
+    # Детектор каждый раз смотрит на все события, поэтому старые инциденты
+    # не дополняем, а заменяем: иначе после смены порогов остались бы устаревшие.
+    session.execute(delete(IncidentRecord))
+    session.add_all(
+        IncidentRecord(
+            kind=incident.kind,
+            ip=incident.ip,
+            start=incident.start,
+            end=incident.end,
+            event_count=incident.event_count,
+            distinct_usernames=incident.distinct_usernames,
+            details=incident.details,
+        )
+        for incident in incidents
+    )
+    session.flush()
+    return len(incidents)
+
+
+def read_incidents(
+    session: Session,
+    *,
+    kind: Optional[IncidentKind] = None,
+    ip: Optional[str] = None,
+) -> list[Incident]:
+    """Принимает необязательные фильтры, возвращает инциденты из базы по времени начала."""
+    query = select(IncidentRecord).order_by(IncidentRecord.start, IncidentRecord.id)
+    if kind is not None:
+        query = query.where(IncidentRecord.kind == kind)
+    if ip is not None:
+        query = query.where(IncidentRecord.ip == ip)
+    return [
+        Incident(
+            kind=record.kind,
+            ip=record.ip,
+            start=record.start,
+            end=record.end,
+            event_count=record.event_count,
+            distinct_usernames=record.distinct_usernames,
+            details=record.details,
+        )
+        for record in session.scalars(query)
+    ]

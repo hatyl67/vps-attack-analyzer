@@ -1,0 +1,27 @@
+# Настройки анализатора. Путь к другому файлу: --config или ATTACK_ANALYZER_CONFIG.
+
+[database]
+# Переменная окружения ATTACK_ANALYZER_DB и опция --db имеют приоритет над этим значением.
+url = "sqlite:///data/attacks.db"
+
+[detector.bruteforce]
+# Человек ошибается в пароле 1-3 раза подряд, бот делает десятки попыток в минуту.
+# 10 попыток за 10 минут отделяет одно от другого с большим запасом.
+threshold = 10
+window_minutes = 10
+
+[detector.enumeration]
+# Перебор логинов: столько разных логинов с одного IP за окно.
+distinct_usernames = 5
+window_minutes = 60
+
+[detector.repeated]
+# IP, который проявлял враждебность в столько разных дней (по UTC), считается
+# повторно атакующим, даже если каждый раз делал мало попыток.
+min_active_days = 3
+
+[detector.success_after_attack]
+# Успешный вход с IP, который незадолго до этого много раз ошибался:
+# возможно, пароль подобран.
+min_failed_before = 5
+lookback_hours = 24

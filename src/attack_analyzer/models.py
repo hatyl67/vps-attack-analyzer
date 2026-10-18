@@ -32,3 +32,25 @@ class AuthEvent:
     auth_method: Optional[str] = None
     invalid_user: bool = False
     source: str = "ssh"
+
+
+class IncidentKind(str, Enum):
+    """Вид атаки, найденной детектором."""
+
+    BRUTEFORCE = "bruteforce"
+    ENUMERATION = "enumeration"
+    REPEATED = "repeated"
+    SUCCESS_AFTER_ATTACK = "success_after_attack"
+
+
+@dataclass(frozen=True)
+class Incident:
+    """Атака, найденная детектором: кто, когда, сколько событий."""
+
+    kind: IncidentKind
+    ip: str
+    start: datetime
+    end: datetime
+    event_count: int
+    distinct_usernames: int
+    details: str

@@ -2,28 +2,36 @@
 
     generate   сгенерировать тестовый auth.log
     parse      разобрать лог и показать сводку
-    import     разобрать лог и сохранить события в базу
+    import     разобрать лог, сохранить события в базу и найти атаки
+    detect     заново найти атаки по событиям в базе (после смены порогов)
     attackers  показать топ атакующих IP из базы
 """
 
 from __future__ import annotations
 
 import argparse
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Sequence
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+from sqlalchemy.orm import Session, sessionmaker
 
+from attack_analyzer.config import ConfigError, DetectorConfig, load_settings
+from attack_analyzer.detector import detect, incidents_to_dataframe
 from attack_analyzer.generator import default_start, generate, write_log
+from attack_analyzer.models import Incident
 from attack_analyzer.parsers import ParseStats, parse_auth_log
 from attack_analyzer.storage import (
     count_events,
     database_url,
     make_engine,
     make_session_factory,
+    read_events,
     refresh_attackers,
+    replace_incidents,
     save_events,
     top_attackers,
 )
@@ -81,26 +89,62 @@ def _cmd_parse(args: argparse.Namespace) -> int:
     return 0
 
 
+def _open_database(args: argparse.Namespace) -> tuple[str, sessionmaker[Session], DetectorConfig]:
+    settings = load_settings(args.config)
+    # Приоритет адреса базы: --db, затем ATTACK_ANALYZER_DB, затем config.toml.
+    url = database_url(args.db or settings.database_url)
+    return url, make_session_factory(make_engine(url)), settings.detector
+
+
+def _run_detector(session: Session, config: DetectorConfig) -> list[Incident]:
+    incidents = detect(read_events(session), config)
+    replace_incidents(session, incidents)
+    return incidents
+
+
+def _print_incidents(incidents: Sequence[Incident], limit: int) -> None:
+    if not incidents:
+        print("Атак не найдено.")
+        return
+    table = incidents_to_dataframe(incidents)
+    print("Инциденты по видам:")
+    print(table["kind"].value_counts().to_string())
+    print(f"\nПоследние {min(limit, len(table))}:")
+    recent = table.sort_values("start", ascending=False).head(limit)
+    recent = recent.assign(start=recent["start"].dt.strftime("%Y-%m-%d %H:%M"))
+    print(recent[["start", "kind", "ip", "event_count", "details"]].to_string(index=False))
+
+
 def _cmd_import(args: argparse.Namespace) -> int:
     stats = ParseStats()
     df = parse_auth_log(args.path, year=args.year, tz=args.tz, stats=stats)
     _print_parse_stats(stats, args.show_unmatched)
 
-    session_factory = make_session_factory(make_engine(args.db))
+    url, session_factory, detector_config = _open_database(args)
     # begin(): один коммит на весь импорт; при ошибке не останется половины событий.
     with session_factory.begin() as session:
         added = save_events(session, df)
         attackers = refresh_attackers(session)
         total = count_events(session)
+        incidents = _run_detector(session, detector_config)
 
-    print(f"\nБаза: {database_url(args.db)}")
+    print(f"\nБаза: {url}")
     print(f"Добавлено событий: {added}, уже были в базе: {len(df) - added}, всего в базе: {total}")
-    print(f"Атакующих IP: {attackers}")
+    print(f"Атакующих IP: {attackers}\n")
+    _print_incidents(incidents, args.limit)
+    return 0
+
+
+def _cmd_detect(args: argparse.Namespace) -> int:
+    _, session_factory, detector_config = _open_database(args)
+    with session_factory.begin() as session:
+        incidents = _run_detector(session, detector_config)
+    _print_incidents(incidents, args.limit)
     return 0
 
 
 def _cmd_attackers(args: argparse.Namespace) -> int:
-    session_factory = make_session_factory(make_engine(args.db))
+    _, session_factory, _ = _open_database(args)
     with session_factory() as session:
         attackers = top_attackers(session, args.limit)
     if not attackers:
@@ -146,7 +190,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="показать N нераспознанных сообщений sshd (0 — не показывать)",
     )
     db_options = argparse.ArgumentParser(add_help=False)
-    db_options.add_argument("--db", help="адрес базы SQLAlchemy (по умолчанию sqlite:///data/attacks.db)")
+    db_options.add_argument("--db", help="адрес базы SQLAlchemy (по умолчанию из config.toml)")
+    db_options.add_argument("--config", type=Path, help="файл настроек (по умолчанию ./config.toml)")
+    incident_options = argparse.ArgumentParser(add_help=False)
+    incident_options.add_argument("--limit", type=int, default=15, help="сколько последних инцидентов показать")
 
     gen = commands.add_parser("generate", help="сгенерировать тестовый auth.log")
     gen.add_argument("--out", type=Path, default=Path("data/generated/auth.log"))
@@ -167,8 +214,13 @@ def build_parser() -> argparse.ArgumentParser:
     parse.add_argument("--csv", type=Path, help="сохранить DataFrame в CSV")
     parse.set_defaults(handler=_cmd_parse)
 
-    load = commands.add_parser("import", parents=[log_options, db_options], help="сохранить события лога в базу")
+    load = commands.add_parser(
+        "import", parents=[log_options, db_options, incident_options], help="сохранить события лога в базу"
+    )
     load.set_defaults(handler=_cmd_import)
+
+    find = commands.add_parser("detect", parents=[db_options, incident_options], help="найти атаки заново")
+    find.set_defaults(handler=_cmd_detect)
 
     top = commands.add_parser("attackers", parents=[db_options], help="топ атакующих IP из базы")
     top.add_argument("--limit", type=int, default=10)
@@ -179,4 +231,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """Принимает аргументы командной строки (None — sys.argv), возвращает код выхода."""
     args = build_parser().parse_args(argv)
-    return args.handler(args)
+    try:
+        return args.handler(args)
+    except ConfigError as error:
+        print(f"Ошибка в настройках: {error}", file=sys.stderr)
+        return 2
