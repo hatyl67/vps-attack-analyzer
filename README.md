@@ -1,21 +1,50 @@
 # Анализатор атак на VPS
 
-Разбор логов SSH с Debian-сервера, поиск брутфорса, перебора логинов
-и сканеров, аналитика и дашборд.
+[![Тесты](https://github.com/hatyl67/vps-attack-analyzer/actions/workflows/tests.yml/badge.svg)](https://github.com/hatyl67/vps-attack-analyzer/actions/workflows/tests.yml)
 
-Генератор тестового `auth.log`, парсер, хранение в SQLite, детектор атак, HTTP API, графики, дашборд, Docker.
+Находит атаки на SSH по логам Debian-сервера: брутфорс, перебор логинов,
+сканеры, повторные атаки и успешный вход после подбора пароля. События
+хранятся в SQLite, к ним есть HTTP API, графики и дашборд.
 
-## Установка
+![Дашборд](docs/images/dashboard.png)
 
-Нужен Python 3.9+. Всё ставится через pip в виртуальное окружение.
+## Возможности
 
-```powershell
-py -3.9 -m venv .venv
-.\.venv\Scripts\activate
-pip install -e ".[dev]"
+- **Парсер** `auth.log` и вывода `journalctl`: классический и ISO-формат времени,
+  сжатые ротации `*.gz`, IPv6, OpenSSH до 10.x (Debian 11–13).
+- **Генератор** реалистичного тестового лога с атаками, чтобы работать без сервера.
+- **Хранение** в SQLite через SQLAlchemy 2: повторный импорт не создаёт дублей.
+- **Детектор**: брутфорс, перебор логинов, повторные атаки, вход после атаки;
+  пороги в `config.toml`.
+- **HTTP API** на FastAPI с документацией в `/docs`.
+- **Графики** на matplotlib и **дашборд** на Shiny for Python.
+- **Docker Compose**: API и дашборд одной командой.
+
+## Быстрый старт
+
+Нужен Python 3.9 или новее.
+
+```bash
+python -m venv .venv
 ```
 
-На Linux/macOS: `python3 -m venv .venv && source .venv/bin/activate`.
+Активировать окружение: `.venv\Scripts\activate` на Windows,
+`source .venv/bin/activate` на Linux и macOS.
+
+```bash
+pip install -e ".[dev]"
+python -m attack_analyzer generate --days 14
+python -m attack_analyzer import data/generated/auth.log --tz Europe/Moscow
+python -m attack_analyzer serve
+```
+
+Во втором терминале:
+
+```bash
+python -m attack_analyzer dashboard --tz Europe/Moscow
+```
+
+Дашборд: http://127.0.0.1:8001, документация API: http://127.0.0.1:8000/docs.
 
 ## Генерация тестового лога
 
@@ -172,8 +201,6 @@ python -m attack_analyzer dashboard --tz Europe/Moscow
 
 Что есть на странице:
 
-![Дашборд](docs/images/dashboard.png)
-
 - период, часовой пояс, типы событий, группировка по дням или часам;
 - цифры за период: события, уникальные IP, атакующие IP, входы после атаки;
 - графики: атаки по времени, тепловая карта «день недели x час», топ логинов;
@@ -229,6 +256,9 @@ ssh -L 8001:127.0.0.1:8001 -L 8000:127.0.0.1:8000 user@your-vps
 pytest
 ```
 
+На GitHub тесты запускаются автоматически при каждом push на Python 3.9 и 3.12,
+там же собирается Docker-образ и проверяется, что API и дашборд отвечают.
+
 ## Структура
 
 ```
@@ -246,7 +276,7 @@ src/attack_analyzer/
     cli.py              команды generate, parse, import, detect, attackers, charts, serve, dashboard
 tests/                  pytest
 config.toml             пороги детектора и адрес базы
-docs/images/            графики для README
+docs/images/            картинки для README
 Dockerfile, docker-compose.yml
 data/                   логи и база (в .gitignore)
 ```

@@ -1,0 +1,46 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    strategy:
+      # Не останавливать вторую версию Python, если упала первая: видно, где именно проблема.
+      fail-fast: false
+      matrix:
+        # Самая старая поддерживаемая версия и та, что в Docker-образе.
+        python-version: ["3.9", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: pytest
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose build
+      # Раннер GitHub работает под uid 1001, а контейнер под 1000: без этого
+      # контейнер не сможет создать базу в смонтированной папке data/.
+      - run: chmod 777 data
+      - name: Сгенерировать и импортировать тестовый лог
+        run: |
+          docker compose run --rm cli generate --days 3
+          docker compose run --rm cli import /app/data/generated/auth.log --tz Europe/Moscow
+      # --wait ждёт, пока healthcheck API станет зелёным и дашборд запустится.
+      - run: docker compose up -d --wait
+      - name: API и дашборд отвечают
+        run: |
+          curl --fail --silent http://127.0.0.1:8000/health
+          curl --fail --silent --output /dev/null http://127.0.0.1:8001
+      - if: failure()
+        run: docker compose logs
+      - if: always()
+        run: docker compose down
