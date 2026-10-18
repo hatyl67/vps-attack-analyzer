@@ -3,7 +3,7 @@
 Разбор логов SSH с Debian-сервера, поиск брутфорса, перебора логинов
 и сканеров, аналитика и дашборд.
 
-Статус: **этап 4** — генератор тестового `auth.log`, парсер, хранение в SQLite, детектор атак, HTTP API.
+Статус: **этап 5** — генератор тестового `auth.log`, парсер, хранение в SQLite, детектор атак, HTTP API, графики.
 
 ## Установка
 
@@ -109,6 +109,24 @@ python -m attack_analyzer detect
 Адрес базы берётся по приоритету: `--db`, затем `ATTACK_ANALYZER_DB`,
 затем `[database] url` из `config.toml`.
 
+## Графики
+
+```bash
+python -m attack_analyzer charts --tz Europe/Moscow
+```
+
+Рисует по событиям из базы четыре PNG в `data/charts/` (папку можно сменить
+опцией `--out`, корзину — `--bucket hour/day`). Примеры ниже построены
+на сгенерированном логе за 14 дней.
+
+![Атаки по дням](docs/images/timeline.png)
+
+![Тепловая карта: день недели x час](docs/images/heatmap.png)
+
+![Топ атакующих IP](docs/images/top_ips.png)
+
+![Топ логинов](docs/images/top_usernames.png)
+
 ## HTTP API
 
 ```bash
@@ -153,12 +171,14 @@ src/attack_analyzer/
     config.py           загрузка config.toml
     detector.py         поиск атак по DataFrame событий
     analytics.py        агрегации: ряды по времени, тепловая карта, топы
+    charts.py           графики matplotlib
     api/                FastAPI: схемы Pydantic, зависимости, эндпоинты
     parsers/auth_log.py парсер auth.log / journalctl
     storage/            SQLAlchemy: таблицы, подключение, запись и чтение
     generator.py        генератор тестового лога
-    cli.py              команды generate, parse, import, detect, attackers, serve
+    cli.py              команды generate, parse, import, detect, attackers, charts, serve
 tests/                  pytest
 config.toml             пороги детектора и адрес базы
+docs/images/            графики для README
 data/                   логи и база (в .gitignore)
 ```

@@ -17,6 +17,7 @@ dependencies = [
     "tzdata",
     "fastapi>=0.110",
     "uvicorn>=0.29",
+    "matplotlib>=3.7",
 ]
 
 [project.optional-dependencies]
@@ -33,3 +34,6 @@ where = ["src"]
 testpaths = ["tests"]
 # Тесты видят пакет из src/ даже без `pip install -e .`
 pythonpath = ["src"]
+# Последний matplotlib для Python 3.9 вызывает устаревшие функции pyparsing.
+# Это не наш код, а шум мешает заметить настоящие предупреждения.
+filterwarnings = ["ignore::DeprecationWarning:matplotlib.*"]

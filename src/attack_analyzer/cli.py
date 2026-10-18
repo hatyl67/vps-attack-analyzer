@@ -5,6 +5,7 @@
     import     разобрать лог, сохранить события в базу и найти атаки
     detect     заново найти атаки по событиям в базе (после смены порогов)
     attackers  показать топ атакующих IP из базы
+    charts     нарисовать графики атак в PNG
     serve      запустить HTTP API
 """
 
@@ -169,6 +170,21 @@ def _cmd_attackers(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_charts(args: argparse.Namespace) -> int:
+    # Импорт внутри команды: matplotlib загружается заметно дольше остальных модулей.
+    from attack_analyzer.charts import save_charts
+
+    _, session_factory, _ = _open_database(args)
+    with session_factory() as session:
+        events = read_events(session)
+    if events.empty:
+        print("В базе нет событий. Сначала выполните import.")
+        return 1
+    for path in save_charts(events, args.out, tz=args.tz, bucket=args.bucket, limit=args.limit):
+        print(f"Сохранён {path}")
+    return 0
+
+
 def _cmd_serve(args: argparse.Namespace) -> int:
     # Импорт внутри команды: остальным командам не нужно тянуть FastAPI и uvicorn.
     import uvicorn
@@ -236,6 +252,13 @@ def build_parser() -> argparse.ArgumentParser:
     top = commands.add_parser("attackers", parents=[db_options], help="топ атакующих IP из базы")
     top.add_argument("--limit", type=int, default=10)
     top.set_defaults(handler=_cmd_attackers)
+
+    charts = commands.add_parser("charts", parents=[db_options], help="нарисовать графики атак в PNG")
+    charts.add_argument("--out", type=Path, default=Path("data/charts"))
+    charts.add_argument("--tz", default="UTC", help="пояс для подписей времени, например Europe/Moscow")
+    charts.add_argument("--bucket", choices=("hour", "day"), default="day")
+    charts.add_argument("--limit", type=int, default=10, help="размер топов IP и логинов")
+    charts.set_defaults(handler=_cmd_charts)
 
     serve = commands.add_parser("serve", parents=[db_options], help="запустить HTTP API")
     # 127.0.0.1 по умолчанию: в API IP-адреса и логины, наружу его открывать незачем.
