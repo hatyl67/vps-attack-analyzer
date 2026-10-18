@@ -1,0 +1,173 @@
+"""Запись событий в базу, пересчёт таблицы attackers и чтение."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from collections import Counter
+from datetime import datetime
+from typing import Any, Optional
+
+import pandas as pd
+from sqlalchemy import Insert, case, delete, func, insert, select
+from sqlalchemy.dialects import postgresql, sqlite
+from sqlalchemy.orm import Session
+
+from attack_analyzer.models import AuthEvent, EventType
+from attack_analyzer.parsers import events_to_dataframe
+from attack_analyzer.storage.schema import Attacker, Event
+
+HOSTILE_EVENT_TYPES = (EventType.FAILED_LOGIN, EventType.INVALID_USER, EventType.SCANNER)
+
+
+def _missing_to_none(value: Any) -> Any:
+    return None if pd.isna(value) else value
+
+
+def _event_rows(events: pd.DataFrame) -> list[dict[str, Any]]:
+    rows = []
+    occurrences: Counter[str] = Counter()
+    for record in events.to_dict("records"):
+        port = _missing_to_none(record["port"])
+        row = {
+            "timestamp": record["timestamp"].to_pydatetime(),
+            "event_type": EventType(record["event_type"]),
+            "ip": record["ip"],
+            "username": _missing_to_none(record["username"]),
+            # numpy.int64 из pandas sqlite3 записать не умеет, нужен обычный int.
+            "port": int(port) if port is not None else None,
+            "auth_method": _missing_to_none(record["auth_method"]),
+            "invalid_user": bool(record["invalid_user"]),
+            "host": record["host"],
+            "source": record["source"],
+        }
+        identity = [
+            row["source"],
+            row["host"],
+            row["timestamp"].isoformat(),
+            row["event_type"].value,
+            row["ip"],
+            row["port"],
+            row["username"],
+        ]
+        # json, а не "|".join: так None и пустой логин "" дают разные строки.
+        content = json.dumps(identity, ensure_ascii=False)
+        # Одинаковые события бывают на самом деле: "message repeated 3 times"
+        # даёт три идентичные строки. Номер повтора внутри файла делает их ключи
+        # разными, а при повторном импорте того же файла ключи совпадут.
+        row["event_key"] = hashlib.sha1(f"{content}#{occurrences[content]}".encode()).hexdigest()
+        occurrences[content] += 1
+        rows.append(row)
+    return rows
+
+
+def _insert_ignoring_duplicates(session: Session) -> Insert:
+    # INSERT ... ON CONFLICT DO NOTHING пишется по-разному в разных СУБД,
+    # поэтому конструкцию берём из модуля конкретного диалекта.
+    dialect = session.get_bind().dialect.name
+    if dialect == "sqlite":
+        return sqlite.insert(Event).on_conflict_do_nothing(index_elements=["event_key"])
+    if dialect == "postgresql":
+        return postgresql.insert(Event).on_conflict_do_nothing(index_elements=["event_key"])
+    raise NotImplementedError(f"СУБД {dialect} не поддерживается")
+
+
+def count_events(session: Session) -> int:
+    """Возвращает число событий в базе."""
+    return session.scalar(select(func.count()).select_from(Event)) or 0
+
+
+def save_events(session: Session, events: pd.DataFrame) -> int:
+    """Принимает DataFrame из парсера, сохраняет новые события, возвращает число добавленных."""
+    if events.empty:
+        return 0
+    # Считаем разницу до и после: rowcount у пакетной вставки надёжен не во всех драйверах.
+    before = count_events(session)
+    session.execute(_insert_ignoring_duplicates(session), _event_rows(events))
+    return count_events(session) - before
+
+
+def _count_where(condition: Any) -> Any:
+    return func.sum(case((condition, 1), else_=0))
+
+
+def refresh_attackers(session: Session) -> int:
+    """Пересчитывает таблицу attackers по всем событиям, возвращает число атакующих IP."""
+    # Таблица целиком выводится из events, поэтому проще и надёжнее
+    # пересобрать её, чем обновлять счётчики по кусочкам при каждом импорте.
+    is_hostile = Event.event_type.in_(HOSTILE_EVENT_TYPES)
+    summary = (
+        select(
+            Event.ip,
+            func.min(Event.timestamp),
+            func.max(Event.timestamp),
+            func.count(),
+            _count_where(Event.event_type == EventType.FAILED_LOGIN),
+            _count_where(Event.event_type == EventType.INVALID_USER),
+            _count_where(Event.event_type == EventType.SCANNER),
+            _count_where(Event.event_type == EventType.ACCEPTED),
+            # case без else даёт NULL для мирных событий, а COUNT(DISTINCT) NULL не считает.
+            func.count(func.distinct(case((is_hostile, Event.username)))),
+        )
+        .group_by(Event.ip)
+        .having(_count_where(is_hostile) > 0)
+    )
+    columns = [
+        "ip",
+        "first_seen",
+        "last_seen",
+        "total_events",
+        "failed_logins",
+        "invalid_users",
+        "scanner_hits",
+        "successful_logins",
+        "distinct_usernames",
+    ]
+    session.execute(delete(Attacker))
+    session.execute(insert(Attacker).from_select(columns, summary))
+    return session.scalar(select(func.count()).select_from(Attacker)) or 0
+
+
+def read_events(
+    session: Session,
+    *,
+    since: Optional[datetime] = None,
+    until: Optional[datetime] = None,
+    ip: Optional[str] = None,
+    event_type: Optional[EventType] = None,
+) -> pd.DataFrame:
+    """Принимает фильтры (время — aware datetime, until не включительно), возвращает DataFrame событий."""
+    query = select(Event).order_by(Event.timestamp, Event.id)
+    if since is not None:
+        query = query.where(Event.timestamp >= since)
+    if until is not None:
+        query = query.where(Event.timestamp < until)
+    if ip is not None:
+        query = query.where(Event.ip == ip)
+    if event_type is not None:
+        query = query.where(Event.event_type == event_type)
+
+    return events_to_dataframe(
+        AuthEvent(
+            timestamp=event.timestamp,
+            event_type=event.event_type,
+            ip=event.ip,
+            host=event.host,
+            username=event.username,
+            port=event.port,
+            auth_method=event.auth_method,
+            invalid_user=event.invalid_user,
+            source=event.source,
+        )
+        for event in session.scalars(query)
+    )
+
+
+def top_attackers(session: Session, limit: int = 10) -> list[Attacker]:
+    """Возвращает до limit атакующих IP, отсортированных по числу неудачных входов."""
+    query = (
+        select(Attacker)
+        .order_by(Attacker.failed_logins.desc(), Attacker.total_events.desc(), Attacker.ip)
+        .limit(limit)
+    )
+    return list(session.scalars(query))
