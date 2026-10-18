@@ -11,3 +11,4 @@ tests
 *.log
 *.gz
 *.db
+build

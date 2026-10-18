@@ -11,11 +11,14 @@ WORKDIR /app
 # Сначала ставим только зависимости, с пустым пакетом-заглушкой. Этот слой
 # Docker кэширует и пересобирает лишь при изменении pyproject.toml, а не при
 # каждой правке кода: иначе каждая сборка заново качала бы pandas и matplotlib.
+# Папку build/ после заглушки обязательно удаляем: setuptools не перезаписывает
+# там файлы, если исходник старше, и пустой __init__.py заглушки попал бы в образ.
 COPY pyproject.toml README.md ./
 RUN mkdir -p src/attack_analyzer \
     && touch src/attack_analyzer/__init__.py \
     && pip install . \
-    && pip uninstall -y attack-analyzer
+    && pip uninstall -y attack-analyzer \
+    && rm -rf build src
 
 COPY src ./src
 COPY config.toml ./
