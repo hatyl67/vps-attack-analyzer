@@ -3,7 +3,7 @@
 Разбор логов SSH с Debian-сервера, поиск брутфорса, перебора логинов
 и сканеров, аналитика и дашборд.
 
-Статус: **этап 3** — генератор тестового `auth.log`, парсер, хранение в SQLite, детектор атак.
+Статус: **этап 4** — генератор тестового `auth.log`, парсер, хранение в SQLite, детектор атак, HTTP API.
 
 ## Установка
 
@@ -109,6 +109,36 @@ python -m attack_analyzer detect
 Адрес базы берётся по приоритету: `--db`, затем `ATTACK_ANALYZER_DB`,
 затем `[database] url` из `config.toml`.
 
+## HTTP API
+
+```bash
+python -m attack_analyzer serve
+```
+
+Документация с возможностью отправить запрос: http://127.0.0.1:8000/docs.
+Для разработки с автоперезапуском:
+`uvicorn attack_analyzer.api.app:create_app --factory --reload`.
+
+| Метод | Что возвращает |
+|---|---|
+| `GET /health` | статус и число событий в базе |
+| `GET /events` | события от новых к старым, постранично (`limit`, `offset`) |
+| `GET /attackers/top` | топ IP; `order_by`: `failed_logins`, `invalid_users`, `scanner_hits`, `distinct_usernames`, `total_events`, `last_seen` |
+| `GET /attackers/{ip}` | сводка по IP и его инциденты |
+| `GET /incidents` | найденные атаки; фильтры `kind`, `ip`, `since`, `until` |
+| `GET /stats/summary` | всего событий, по типам, уникальных IP, атакующих, инцидентов |
+| `GET /stats/timeline` | события по часам или дням (`bucket=hour/day`) с разбивкой по типам |
+| `GET /stats/heatmap` | матрица 7x24 «день недели x час» |
+| `GET /stats/top-usernames` | самые частые логины (по умолчанию в неудачных входах) |
+
+Общие фильтры событий: `since`, `until` (ISO 8601, время без пояса — UTC,
+`until` не включается), `ip`, `username`, `event_type` (можно повторять:
+`?event_type=scanner&event_type=invalid_user`). Для `timeline` и `heatmap`
+параметр `tz` задаёт пояс группировки, например `Europe/Moscow`.
+
+API только читает данные; события попадают в базу командой `import`.
+По умолчанию сервер слушает 127.0.0.1.
+
 ## Тесты
 
 ```bash
@@ -122,10 +152,12 @@ src/attack_analyzer/
     models.py           EventType, AuthEvent, IncidentKind, Incident
     config.py           загрузка config.toml
     detector.py         поиск атак по DataFrame событий
+    analytics.py        агрегации: ряды по времени, тепловая карта, топы
+    api/                FastAPI: схемы Pydantic, зависимости, эндпоинты
     parsers/auth_log.py парсер auth.log / journalctl
     storage/            SQLAlchemy: таблицы, подключение, запись и чтение
     generator.py        генератор тестового лога
-    cli.py              команды generate, parse, import, detect, attackers
+    cli.py              команды generate, parse, import, detect, attackers, serve
 tests/                  pytest
 config.toml             пороги детектора и адрес базы
 data/                   логи и база (в .gitignore)

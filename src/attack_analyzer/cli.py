@@ -5,6 +5,7 @@
     import     разобрать лог, сохранить события в базу и найти атаки
     detect     заново найти атаки по событиям в базе (после смены порогов)
     attackers  показать топ атакующих IP из базы
+    serve      запустить HTTP API
 """
 
 from __future__ import annotations
@@ -168,6 +169,16 @@ def _cmd_attackers(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_serve(args: argparse.Namespace) -> int:
+    # Импорт внутри команды: остальным командам не нужно тянуть FastAPI и uvicorn.
+    import uvicorn
+
+    from attack_analyzer.api import create_app
+
+    uvicorn.run(create_app(args.db, args.config), host=args.host, port=args.port)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Возвращает argparse-парсер со всеми подкомандами."""
     parser = argparse.ArgumentParser(
@@ -225,6 +236,12 @@ def build_parser() -> argparse.ArgumentParser:
     top = commands.add_parser("attackers", parents=[db_options], help="топ атакующих IP из базы")
     top.add_argument("--limit", type=int, default=10)
     top.set_defaults(handler=_cmd_attackers)
+
+    serve = commands.add_parser("serve", parents=[db_options], help="запустить HTTP API")
+    # 127.0.0.1 по умолчанию: в API IP-адреса и логины, наружу его открывать незачем.
+    serve.add_argument("--host", default="127.0.0.1")
+    serve.add_argument("--port", type=int, default=8000)
+    serve.set_defaults(handler=_cmd_serve)
     return parser
 
 

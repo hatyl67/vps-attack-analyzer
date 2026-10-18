@@ -5,11 +5,12 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import Counter
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Optional, Sequence
 
 import pandas as pd
-from sqlalchemy import Insert, case, delete, func, insert, select
+from sqlalchemy import Insert, Select, case, delete, func, insert, select
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.orm import Session
 
@@ -125,28 +126,39 @@ def refresh_attackers(session: Session) -> int:
     ]
     session.execute(delete(Attacker))
     session.execute(insert(Attacker).from_select(columns, summary))
-    return session.scalar(select(func.count()).select_from(Attacker)) or 0
+    return count_attackers(session)
 
 
-def read_events(
-    session: Session,
-    *,
-    since: Optional[datetime] = None,
-    until: Optional[datetime] = None,
-    ip: Optional[str] = None,
-    event_type: Optional[EventType] = None,
-) -> pd.DataFrame:
-    """Принимает фильтры (время — aware datetime, until не включительно), возвращает DataFrame событий."""
-    query = select(Event).order_by(Event.timestamp, Event.id)
-    if since is not None:
-        query = query.where(Event.timestamp >= since)
-    if until is not None:
-        query = query.where(Event.timestamp < until)
-    if ip is not None:
-        query = query.where(Event.ip == ip)
-    if event_type is not None:
-        query = query.where(Event.event_type == event_type)
+@dataclass(frozen=True)
+class EventFilter:
+    """Условия выборки событий. Время — aware datetime, until не включается."""
 
+    since: Optional[datetime] = None
+    until: Optional[datetime] = None
+    ip: Optional[str] = None
+    username: Optional[str] = None
+    event_types: Optional[Sequence[EventType]] = None
+
+
+def _filtered(query: Select, filters: Optional[EventFilter]) -> Select:
+    if filters is None:
+        return query
+    if filters.since is not None:
+        query = query.where(Event.timestamp >= filters.since)
+    if filters.until is not None:
+        query = query.where(Event.timestamp < filters.until)
+    if filters.ip is not None:
+        query = query.where(Event.ip == filters.ip)
+    if filters.username is not None:
+        query = query.where(Event.username == filters.username)
+    if filters.event_types:
+        query = query.where(Event.event_type.in_(filters.event_types))
+    return query
+
+
+def read_events(session: Session, filters: Optional[EventFilter] = None) -> pd.DataFrame:
+    """Принимает фильтр, возвращает DataFrame событий (как у парсера), отсортированный по времени."""
+    query = _filtered(select(Event).order_by(Event.timestamp, Event.id), filters)
     return events_to_dataframe(
         AuthEvent(
             timestamp=event.timestamp,
@@ -163,14 +175,57 @@ def read_events(
     )
 
 
-def top_attackers(session: Session, limit: int = 10) -> list[Attacker]:
-    """Возвращает до limit атакующих IP, отсортированных по числу неудачных входов."""
+def list_events(
+    session: Session,
+    filters: Optional[EventFilter] = None,
+    *,
+    limit: int = 100,
+    offset: int = 0,
+) -> tuple[int, list[Event]]:
+    """Принимает фильтр и страницу, возвращает (сколько всего подходит, события страницы от новых к старым)."""
+    total = session.scalar(_filtered(select(func.count()).select_from(Event), filters)) or 0
+    query = _filtered(select(Event), filters).order_by(Event.timestamp.desc(), Event.id.desc())
+    return total, list(session.scalars(query.limit(limit).offset(offset)))
+
+
+ATTACKER_SORT_FIELDS = (
+    "failed_logins",
+    "invalid_users",
+    "scanner_hits",
+    "distinct_usernames",
+    "total_events",
+    "last_seen",
+)
+
+
+def top_attackers(session: Session, limit: int = 10, order_by: str = "failed_logins") -> list[Attacker]:
+    """Принимает размер топа и поле из ATTACKER_SORT_FIELDS, возвращает атакующих по убыванию этого поля."""
+    if order_by not in ATTACKER_SORT_FIELDS:
+        raise ValueError(f"order_by должен быть одним из {ATTACKER_SORT_FIELDS}")
     query = (
         select(Attacker)
-        .order_by(Attacker.failed_logins.desc(), Attacker.total_events.desc(), Attacker.ip)
+        .order_by(getattr(Attacker, order_by).desc(), Attacker.total_events.desc(), Attacker.ip)
         .limit(limit)
     )
     return list(session.scalars(query))
+
+
+def get_attacker(session: Session, ip: str) -> Optional[Attacker]:
+    """Возвращает сводку по IP или None, если IP не атаковал."""
+    return session.get(Attacker, ip)
+
+
+def count_attackers(session: Session) -> int:
+    """Возвращает число атакующих IP."""
+    return session.scalar(select(func.count()).select_from(Attacker)) or 0
+
+
+def count_incidents_by_kind(session: Session) -> dict[IncidentKind, int]:
+    """Возвращает число инцидентов каждого вида (виды без инцидентов — с нулём)."""
+    rows = session.execute(select(IncidentRecord.kind, func.count()).group_by(IncidentRecord.kind))
+    counts = {kind: 0 for kind in IncidentKind}
+    counts.update({kind: count for kind, count in rows})
+    return counts
 
 
 def replace_incidents(session: Session, incidents: Sequence[Incident]) -> int:
@@ -199,6 +254,8 @@ def read_incidents(
     *,
     kind: Optional[IncidentKind] = None,
     ip: Optional[str] = None,
+    since: Optional[datetime] = None,
+    until: Optional[datetime] = None,
 ) -> list[Incident]:
     """Принимает необязательные фильтры, возвращает инциденты из базы по времени начала."""
     query = select(IncidentRecord).order_by(IncidentRecord.start, IncidentRecord.id)
@@ -206,6 +263,11 @@ def read_incidents(
         query = query.where(IncidentRecord.kind == kind)
     if ip is not None:
         query = query.where(IncidentRecord.ip == ip)
+    # Инцидент попадает в период, если пересекается с ним, а не только начался внутри.
+    if since is not None:
+        query = query.where(IncidentRecord.end >= since)
+    if until is not None:
+        query = query.where(IncidentRecord.start < until)
     return [
         Incident(
             kind=record.kind,

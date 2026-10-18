@@ -18,6 +18,7 @@ from attack_analyzer.models import EventType
 from attack_analyzer.parsers import events_to_dataframe, parse_lines
 from attack_analyzer.storage import (
     Attacker,
+    EventFilter,
     count_events,
     make_engine,
     make_session_factory,
@@ -87,13 +88,13 @@ def test_read_events_filters(session: Session, generated_df: pd.DataFrame) -> No
     save_events(session, generated_df)
     since = datetime(2026, 10, 2, tzinfo=timezone.utc)
     until = datetime(2026, 10, 3, tzinfo=timezone.utc)
-    loaded = read_events(session, since=since, until=until, event_type=EventType.SCANNER)
+    loaded = read_events(session, EventFilter(since=since, until=until, event_types=[EventType.SCANNER]))
     assert not loaded.empty
     assert loaded["timestamp"].between(since, until, inclusive="left").all()
     assert set(loaded["event_type"]) == {"scanner"}
 
     ip = generated_df["ip"].iloc[0]
-    assert set(read_events(session, ip=ip)["ip"]) == {ip}
+    assert set(read_events(session, EventFilter(ip=ip))["ip"]) == {ip}
 
 
 def test_refresh_attackers(session: Session, generated: GeneratedLog, generated_df: pd.DataFrame) -> None:

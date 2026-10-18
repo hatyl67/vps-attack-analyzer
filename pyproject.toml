@@ -15,10 +15,13 @@ dependencies = [
     "tomli>=1.1; python_version < '3.11'",
     # База часовых поясов для zoneinfo: на Windows и в slim-образах её нет.
     "tzdata",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7"]
+# httpx нужен TestClient из FastAPI.
+dev = ["pytest>=7", "httpx>=0.27"]
 
 [project.scripts]
 attack-analyzer = "attack_analyzer.cli:main"
